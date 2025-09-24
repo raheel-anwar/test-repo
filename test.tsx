@@ -30,30 +30,23 @@ export const usePermissionErrors = create<PermissionErrorsState>((set) => ({
 }));
 
 
-import { QueryClient } from "@tanstack/react-query";
-import axios from "axios";
-import { usePermissionErrors } from "./permissionErrorsStore";
+queryClient.getQueryCache().subscribe((event) => {
+  if (event.type === 'queryUpdated' || event.type === 'queryAdded') return;
 
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: (failureCount, error) => {
-        if (axios.isAxiosError(error) && error.response?.status === 403) return false;
-        return failureCount < 3;
-      },
-      onError: (error, query) => {
-        if (axios.isAxiosError(error) && error.response?.status === 403) {
-          const key = JSON.stringify(query.queryKey);
-          const serverMessage = error.response?.data?.message || "Access denied.";
-          usePermissionErrors.getState().addMessage(key, serverMessage);
-        }
-      },
-      onSuccess: (_, __, query) => {
-        const key = JSON.stringify(query.queryKey);
-        usePermissionErrors.getState().clearQuery(key);
-      },
-    },
-  },
+  if (event.type === 'queryFailed') {
+    const { query, error } = event;
+    if (axios.isAxiosError(error) && error.response?.status === 403) {
+      const key = JSON.stringify(query.queryKey);
+      const serverMessage = error.response?.data?.message || "Access denied.";
+      usePermissionErrors.getState().addMessage(key, serverMessage);
+    }
+  }
+
+  if (event.type === 'querySuccess') {
+    const { query } = event;
+    const key = JSON.stringify(query.queryKey);
+    usePermissionErrors.getState().clearQuery(key);
+  }
 });
 
 import { usePermissionErrors } from "./permissionErrorsStore";
