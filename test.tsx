@@ -1,69 +1,138 @@
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  FormField,
-  FormItem,
-  FormLabel,
-  FormControl,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import { Control, Controller, useForm } from "react-hook-form";
+import { create } from "zustand";
 
-interface KeyValueObjectInputProps<T extends Record<string, any>> {
-  control: Control<T>;
-  name: string; // path to the object in the form, e.g., "data"
-  label?: string;
+interface PermissionErrorsState {
+  messages: Record<string, string[]>; // queryKey → list of messages
+  addMessage: (queryKey: string, msg: string) => void;
+  clearQuery: (queryKey: string) => void;
+  dismissMessage: (queryKey: string, index: number) => void;
 }
 
-export function KeyValueObjectInput<T extends Record<string, any>>({
-  control,
-  name,
-  label,
-}: KeyValueObjectInputProps<T>) {
-  const [keys, setKeys] = useState<string[]>([]);
+export const usePermissionErrors = create<PermissionErrorsState>((set) => ({
+  messages: {},
+  addMessage: (queryKey, msg) =>
+    set((state) => {
+      const existing = state.messages[queryKey] || [];
+      if (existing.includes(msg)) return state; // avoid duplicates
+      return { messages: { ...state.messages, [queryKey]: [...existing, msg] } };
+    }),
+  clearQuery: (queryKey) =>
+    set((state) => {
+      const newMessages = { ...state.messages };
+      delete newMessages[queryKey];
+      return { messages: newMessages };
+    }),
+  dismissMessage: (queryKey, index) =>
+    set((state) => {
+      const queryMessages = [...(state.messages[queryKey] || [])];
+      queryMessages.splice(index, 1);
+      return { messages: { ...state.messages, [queryKey]: queryMessages } };
+    }),
+}));
 
-  const addKey = () => {
-    const newKey = `key${keys.length + 1}`;
-    setKeys([...keys, newKey]);
-  };
 
-  const removeKey = (keyToRemove: string) => {
-    setKeys(keys.filter((k) => k !== keyToRemove));
-    control.setValue(`${name}.${keyToRemove}`, undefined);
-  };
+import { QueryClient } from "@tanstack/react-query";
+import axios from "axios";
+import { usePermissionErrors } from "./permissionErrorsStore";
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        if (axios.isAxiosError(error) && error.response?.status === 403) return false;
+        return failureCount < 3;
+      },
+      onError: (error, query) => {
+        if (axios.isAxiosError(error) && error.response?.status === 403) {
+          const key = JSON.stringify(query.queryKey);
+          const serverMessage = error.response?.data?.message || "Access denied.";
+          usePermissionErrors.getState().addMessage(key, serverMessage);
+        }
+      },
+      onSuccess: (_, __, query) => {
+        const key = JSON.stringify(query.queryKey);
+        usePermissionErrors.getState().clearQuery(key);
+      },
+    },
+  },
+});
+
+import { usePermissionErrors } from "./permissionErrorsStore";
+import { AlertTriangle } from "lucide-react";
+
+export function AccessDeniedBanner() {
+  const { messages, dismissMessage } = usePermissionErrors();
+  const queryKeys = Object.keys(messages);
+  if (queryKeys.length === 0) return null;
 
   return (
-    <div className="space-y-4">
-      {label && <h3 className="text-lg font-medium">{label}</h3>}
-
-      {keys.map((key) => (
-        <Card key={key} className="p-4 flex items-center space-x-2">
-          {/* Key field */}
-          <FormField
-            control={control}
-            name={`${name}.${key}`}
-            render={({ field }) => (
-              <FormItem className="flex-1 flex flex-col">
-                <FormLabel>{key}</FormLabel>
-                <FormControl>
-                  <Input {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <Button variant="destructive" size="sm" onClick={() => removeKey(key)}>
-            Remove
-          </Button>
-        </Card>
-      ))}
-
-      <Button type="button" onClick={addKey}>
-        Add Key
-      </Button>
+    <div className="bg-red-600 text-white p-3 space-y-2 rounded-lg">
+      {queryKeys.map((key) =>
+        messages[key].map((msg, idx) => (
+          <div key={`${key}-${idx}`} className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+            <span>{msg}</span>
+            <button
+              onClick={() => dismissMessage(key, idx)}
+              className="ml-auto text-sm underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        ))
+      )}
     </div>
   );
 }
+
+
+import { useQuery } from "@tanstack/react-query";
+import axios from "axios";
+import { AccessDeniedBanner } from "./AccessDeniedBanner";
+
+export function ProjectsPage() {
+  const projectsQuery = useQuery({
+    queryKey: ["projects"],
+    queryFn: async () => {
+      const res = await axios.get("/api/projects");
+      return res.data;
+    },
+  });
+
+  const usersQuery = useQuery({
+    queryKey: ["users"],
+    queryFn: async () => {
+      const res = await axios.get("/api/users");
+      return res.data;
+    },
+  });
+
+  const isLoading = projectsQuery.isLoading || usersQuery.isLoading;
+
+  return (
+    <div className="p-4">
+      {/* Banner automatically shows per-query permission errors */}
+      <AccessDeniedBanner />
+
+      {isLoading && <p>Loading...</p>}
+
+      {projectsQuery.isSuccess && (
+        <div>
+          <h2>Projects</h2>
+          <pre>{JSON.stringify(projectsQuery.data, null, 2)}</pre>
+        </div>
+      )}
+
+      {usersQuery.isSuccess && (
+        <div>
+          <h2>Users</h2>
+          <pre>{JSON.stringify(usersQuery.data, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+
+
