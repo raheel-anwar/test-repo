@@ -1,117 +1,117 @@
-import { create } from "zustand"
+// src/status/config.ts
+import { CheckCircle, XCircle, Loader, PauseCircle, Truck } from "lucide-react"
 
-export type NotificationType = "success" | "error" | "info" | "warning"
-
-export type Notification = {
-  id: string
-  message: string
-  description?: string
-  type: NotificationType
+export type StatusStyle = {
+  label: string
+  className: string
+  icon?: React.ComponentType<{ className?: string }>
 }
 
-type NotificationState = {
-  notifications: Notification[]
-  addNotification: (n: Omit<Notification, "id">) => void
-  removeNotification: (id: string) => void
+// 🔹 Job Status
+export const jobStatusConfig = {
+  RUNNING: {
+    label: "Running",
+    className: "bg-blue-100 text-blue-800 border border-blue-300",
+    icon: Loader,
+  },
+  TERMINATED: {
+    label: "Terminated",
+    className: "bg-gray-100 text-gray-800 border border-gray-300",
+    icon: PauseCircle,
+  },
+  PENDING: {
+    label: "Pending",
+    className: "bg-yellow-100 text-yellow-800 border border-yellow-300",
+    icon: Loader,
+  },
+  FAILED: {
+    label: "Failed",
+    className: "bg-red-100 text-red-800 border border-red-300",
+    icon: XCircle,
+  },
+} as const
+export type JobStatus = keyof typeof jobStatusConfig
+
+// 🔹 Order Status
+export const orderStatusConfig = {
+  DISPATCHED: {
+    label: "Dispatched",
+    className: "bg-purple-100 text-purple-800 border border-purple-300",
+    icon: Truck,
+  },
+  PROCESSING: {
+    label: "Processing",
+    className: "bg-yellow-100 text-yellow-800 border border-yellow-300",
+    icon: Loader,
+  },
+  DONE: {
+    label: "Done",
+    className: "bg-green-100 text-green-800 border border-green-300",
+    icon: CheckCircle,
+  },
+} as const
+export type OrderStatus = keyof typeof orderStatusConfig
+
+// 🔹 Registry
+export const statusRegistry = {
+  job: jobStatusConfig,
+  order: orderStatusConfig,
+} as const
+
+export type StatusType = keyof typeof statusRegistry
+
+
+// src/components/common/StatusBadge.tsx
+import { Badge } from "@/components/ui/badge"
+import { statusRegistry, StatusType, StatusStyle } from "@/status/config"
+
+type StatusBadgeProps<T extends StatusType> = {
+  type: T
+  status: keyof typeof statusRegistry[T]
+  fallbackLabel?: string
 }
 
-export const useNotificationStore = create<NotificationState>((set) => ({
-  notifications: [],
-  addNotification: (n) =>
-    set((state) => ({
-      notifications: [
-        ...state.notifications,
-        { ...n, id: crypto.randomUUID() },
-      ],
-    })),
-  removeNotification: (id) =>
-    set((state) => ({
-      notifications: state.notifications.filter((n) => n.id !== id),
-    })),
-}))
+export function StatusBadge<T extends StatusType>({
+  type,
+  status,
+  fallbackLabel = "Unknown",
+}: StatusBadgeProps<T>) {
+  const config = statusRegistry[type] as Record<string, StatusStyle>
+  const item = config[status as string]
 
-
-import { useEffect } from "react"
-import { toast } from "sonner"
-import { useNotificationStore } from "@/store/notificationStore"
-import { CheckCircle2, ShieldAlert, Info, AlertTriangle } from "lucide-react"
-
-const icons = {
-  success: <CheckCircle2 className="w-5 h-5 text-green-500" />,
-  error: <ShieldAlert className="w-5 h-5 text-red-500" />,
-  info: <Info className="w-5 h-5 text-blue-500" />,
-  warning: <AlertTriangle className="w-5 h-5 text-yellow-500" />,
-}
-
-const DEFAULT_DURATION = 5000
-const DEFAULT_POSITION: "top-left" | "top-right" | "bottom-left" | "bottom-right" =
-  "top-right"
-
-export function NotificationManager() {
-  const { notifications, removeNotification } = useNotificationStore()
-
-  useEffect(() => {
-    notifications.forEach((n) => {
-      const common = {
-        description: n.description,
-        icon: icons[n.type],
-        duration: DEFAULT_DURATION,
-        position: DEFAULT_POSITION,
-      }
-
-      switch (n.type) {
-        case "success":
-          toast.success(n.message, common)
-          break
-        case "error":
-          toast.error(n.message, common)
-          break
-        case "warning":
-          toast.warning?.(n.message, common)
-          break
-        case "info":
-        default:
-          toast(n.message, common)
-      }
-
-      removeNotification(n.id) // cleanup after showing
-    })
-  }, [notifications, removeNotification])
-
-  return null
-}
-
-import { useNotificationStore, NotificationType } from "@/store/notificationStore"
-
-export function useNotify() {
-  const addNotification = useNotificationStore((s) => s.addNotification)
-
-  const notify = (
-    type: NotificationType,
-    message: string,
-    description?: string
-  ) => {
-    addNotification({ message, description, type })
+  if (!item) {
+    return (
+      <Badge
+        className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800 border border-gray-300"
+        variant="outline"
+      >
+        {fallbackLabel}
+      </Badge>
+    )
   }
 
-  return {
-    success: (msg: string, desc?: string) => notify("success", msg, desc),
-    error: (msg: string, desc?: string) => notify("error", msg, desc),
-    info: (msg: string, desc?: string) => notify("info", msg, desc),
-    warning: (msg: string, desc?: string) => notify("warning", msg, desc),
-  }
-}
+  const Icon = item.icon
 
-
-import { Toaster } from "sonner"
-import { NotificationManager } from "@/components/NotificationManager"
-
-export default function App() {
   return (
-    <>
-      <YourRoutes />
-      <NotificationManager />
-      <Toaster richColors position="top-right" />
-    </>
+    <Badge
+      className={`px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${item.className}`}
+      variant="outline"
+    >
+      {Icon && <Icon className="h-3 w-3" />}
+      {item.label}
+    </Badge>
+  )
+}
+
+// JobCard.tsx
+import { StatusBadge } from "@/components/common/StatusBadge"
+import type { JobStatus } from "@/status/config"
+
+export function JobCard({ status }: { status: JobStatus }) {
+  return (
+    <div className="p-4 border rounded-lg shadow-sm space-y-2">
+      <h3 className="text-sm font-semibold">Job #123</h3>
+      <StatusBadge type="job" status={status} />
+    </div>
   )
 }
