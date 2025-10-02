@@ -1,200 +1,104 @@
-# app/database.py
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from pydantic import BaseModel
+from typing import Generic, TypeVar, List, Optional
 
-DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5432/mydb"
+T = TypeVar("T")
 
-engine = create_async_engine(DATABASE_URL, echo=True, future=True)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+class PaginatedResult(BaseModel, Generic[T]):
+    data: List[T]
+    count: int                      # number of items in this page
+    next_page_token: Optional[str] = None
+    approx_total: Optional[int] = None  # approximate total of filtered items
 
-async def get_async_db() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
-        yield session
+class WorkflowService:
+    def __init__(self, temporal_client: Client):
+        self.client = temporal_client
 
+    @staticmethod
+    def build_query(filters: Optional[WorkflowFilter]) -> str:
+        if not filters:
+            return ""
+        query_parts = []
+        if filters.workflow_id__eq:
+            query_parts.append(f"WorkflowId='{filters.workflow_id__eq}'")
+        if filters.workflow_type__icontains:
+            query_parts.append(f"WorkflowType LIKE '%{filters.workflow_type__icontains}%'")
+        if filters.status__in:
+            statuses = " OR ".join(f"ExecutionStatus='{s.value}'" for s in filters.status__in)
+            query_parts.append(f"({statuses})")
+        if filters.start_time__gte:
+            query_parts.append(f"StartTime>='{filters.start_time__isoformat()}'")
+        if filters.start_time__lte:
+            query_parts.append(f"StartTime<='{filters.start_time__isoformat()}'")
+        if filters.end_time__gte:
+            query_parts.append(f"CloseTime>='{filters.end_time__isoformat()}'")
+        if filters.end_time__lte:
+            query_parts.append(f"CloseTime<='{filters.end_time__isoformat()}'")
+        return " AND ".join(query_parts)
 
-# app/models/execution.py
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-import datetime
-
-class Base(DeclarativeBase):
-    pass
-
-class Execution(Base):
-    __tablename__ = "executions"
-
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    name: Mapped[str]
-    status: Mapped[str]
-    owner: Mapped[str]
-    secret_token: Mapped[str]  # excluded from filtering
-    created_at: Mapped[datetime.datetime] = mapped_column(default=datetime.datetime.utcnow)
-
-
-# app/schemas/query.py
-from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
-
-class PaginationParams(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    page: int = Field(1, ge=1)
-    page_size: int = Field(10, ge=1, le=100)
-
-class SortingParams(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    sort_by: Optional[str] = None
-    sort_order: Optional[str] = Field("asc", pattern="^(asc|desc)$")
-
-class FilterParams(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    # Example: filters[created_at][gte]=2025-01-01
-    filters: Optional[Dict[str, Dict[str, Any]]] = None
-
-
-# app/utils/query.py
-from sqlalchemy import asc, desc
-from sqlalchemy.sql import Select
-
-OPERATORS = {
-    "eq": lambda col, val: col == val,
-    "neq": lambda col, val: col != val,
-    "gt": lambda col, val: col > val,
-    "gte": lambda col, val: col >= val,
-    "lt": lambda col, val: col < val,
-    "lte": lambda col, val: col <= val,
-    "contains": lambda col, val: col.contains(val),
-    "icontains": lambda col, val: col.ilike(f"%{val}%"),
-    "in": lambda col, val: col.in_(val if isinstance(val, list) else str(val).split(",")),
-}
-
-def apply_filters(query: Select, filters: dict, allowed_map: dict) -> Select:
-    if not filters:
-        return query
-    for field, ops in filters.items():
-        column = allowed_map.get(field)
-        if not column:
-            continue
-        for op, value in ops.items():
-            operator_func = OPERATORS.get(op)
-            if operator_func:
-                query = query.where(operator_func(column, value))
-    return query
-
-def apply_sorting(query: Select, sort_by: str, sort_order: str, allowed_map: dict) -> Select:
-    if not sort_by:
-        return query
-    column = allowed_map.get(sort_by)
-    if not column:
-        return query
-    return query.order_by((desc if sort_order == "desc" else asc)(column))
-
-def get_model_columns(model, exclude: set[str] = None) -> dict[str, any]:
-    exclude = exclude or set()
-    return {
-        col.key: getattr(model, col.key)
-        for col in model.__table__.columns
-        if col.key not in exclude
-    }
-
-
-# app/repository/base.py
-from typing import Generic, TypeVar, Type, Dict, Any, Optional
-from sqlalchemy import select, func, update, delete
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.schemas.query import PaginationParams, SortingParams, FilterParams
-from app.utils.query import apply_filters, apply_sorting
-
-ModelType = TypeVar("ModelType")
-
-class BaseRepository(Generic[ModelType]):
-    def __init__(self, model: Type[ModelType], allowed_map: dict[str, Any]):
-        self.model = model
-        self.allowed_map = allowed_map
-
-    async def get_by_id(self, db: AsyncSession, obj_id: Any) -> Optional[ModelType]:
-        result = await db.execute(select(self.model).where(self.model.id == obj_id))
-        return result.scalars().first()
-
-    async def get_all(
+    async def list_workflows(
         self,
-        db: AsyncSession,
-        pagination: PaginationParams,
-        sorting: SortingParams,
-        filters: FilterParams,
-    ) -> Dict[str, Any]:
-        query = select(self.model)
-        query = apply_filters(query, filters.filters, self.allowed_map)
-        query = apply_sorting(query, sorting.sort_by, sorting.sort_order, self.allowed_map)
+        filters: Optional[WorkflowFilter] = None,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        next_page_token: Optional[bytes] = None,
+        sorting: Optional[SortingParams] = None,
+        approximate_total: bool = True
+    ) -> PaginatedResult[WorkflowExecutionRead]:
 
-        # total count
-        count_query = select(func.count()).select_from(query.subquery())
-        total = (await db.execute(count_query)).scalar_one()
+        page_size = min(page_size, MAX_PAGE_SIZE)
+        query = self.build_query(filters)
 
-        # pagination
-        query = query.offset((pagination.page - 1) * pagination.page_size).limit(pagination.page_size)
-        result = await db.execute(query)
-        items = result.scalars().all()
+        # Fetch workflows from Temporal
+        response = await self.client.list_workflow_executions(
+            query=query,
+            page_size=page_size,
+            next_page_token=next_page_token
+        )
 
-        return {"data": items, "total": total}
+        workflows = [
+            WorkflowExecutionRead(
+                workflow_id=w.execution.workflow_id,
+                run_id=w.execution.run_id,
+                workflow_type=w.type.name,
+                status=WorkflowStatus(w.status.name),
+                start_time=w.start_time,
+                end_time=w.end_time
+            )
+            for w in response.executions
+        ]
 
-    async def create(self, db: AsyncSession, obj_in: Dict[str, Any]) -> ModelType:
-        obj = self.model(**obj_in)
-        db.add(obj)
-        await db.commit()
-        await db.refresh(obj)
-        return obj
+        # Optional in-memory sort
+        if sorting and sorting.sort_by:
+            reverse = sorting.sort_order == "desc"
+            workflows.sort(key=lambda w: getattr(w, sorting.sort_by, None), reverse=reverse)
 
-    async def update(self, db: AsyncSession, obj_id: Any, obj_in: Dict[str, Any]) -> Optional[ModelType]:
-        await db.execute(update(self.model).where(self.model.id == obj_id).values(**obj_in))
-        await db.commit()
-        return await self.get_by_id(db, obj_id)
+        # Approximate total
+        total_estimate = len(workflows)
+        if approximate_total:
+            # Fetch one additional workflow to see if there are more pages
+            if response.next_page_token:
+                total_estimate += 1  # we know there’s at least one more workflow
 
-    async def delete(self, db: AsyncSession, obj_id: Any) -> None:
-        await db.execute(delete(self.model).where(self.model.id == obj_id))
-        await db.commit()
-
-
-# app/repository/execution.py
-from app.repository.base import BaseRepository
-from app.models.execution import Execution
-from app.utils.query import get_model_columns
-
-class ExecutionRepository(BaseRepository[Execution]):
-    def __init__(self):
-        allowed_map = get_model_columns(Execution, exclude={"secret_token"})
-        super().__init__(Execution, allowed_map)
+        return PaginatedResult(
+            data=workflows,
+            count=len(workflows),
+            next_page_token=response.next_page_token.decode() if response.next_page_token else None,
+            approx_total=total_estimate
+        )
 
 
-# app/api/executions.py
-from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import get_async_db
-from app.schemas.query import PaginationParams, SortingParams, FilterParams
-from app.repository.execution import ExecutionRepository
-
-router = APIRouter()
-repo = ExecutionRepository()
-
-@router.get("/executions")
-async def list_executions(
-    pagination: PaginationParams = Depends(),
+@router.get("/workflows", response_model=PaginatedResult[WorkflowExecutionRead])
+async def list_workflows(
+    filters: WorkflowFilter = Depends(),
+    page_size: int = DEFAULT_PAGE_SIZE,
+    next_page_token: Optional[str] = None,
     sorting: SortingParams = Depends(),
-    filters: FilterParams = Depends(),
-    db: AsyncSession = Depends(get_async_db),
+    temporal_client: Client = Depends(get_temporal_client)
 ):
-    return await repo.get_all(db, pagination, sorting, filters)
-
-@router.get("/executions/{execution_id}")
-async def get_execution(execution_id: int, db: AsyncSession = Depends(get_async_db)):
-    return await repo.get_by_id(db, execution_id)
-
-
-GET /executions?page=1&page_size=20
-
-GET /executions?filters[status][eq]=running
-
-GET /executions?filters[created_at][gte]=2025-01-01&filters[created_at][lte]=2025-12-31
-
-GET /executions?sort_by=created_at&sort_order=desc
-
+    service = WorkflowService(temporal_client)
+    result = await service.list_workflows(
+        filters=filters,
+        page_size=page_size,
+        next_page_token=next_page_token.encode() if next_page_token else None,
+        sorting=sorting,
+    )
+    return result
