@@ -173,3 +173,53 @@ declare module "@tanstack/react-table" {
   }
 }
 
+import { useState, useEffect } from "react";
+
+export function useDebounce<T>(value: T, delay: number = 300): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+import { Column } from "@tanstack/react-table";
+import { useState, useEffect } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
+
+interface TextFilterProps<TData> {
+  column: Column<TData, unknown>;
+  debounceMs?: number;
+  placeholder?: string;
+}
+
+export function TextFilter<TData>({
+  column,
+  debounceMs = 300,
+  placeholder = "Filter...",
+}: TextFilterProps<TData>) {
+  // Local state keeps input value to prevent focus loss
+  const [value, setValue] = useState((column.getFilterValue() as string) ?? "");
+
+  // Debounced value updates table filter
+  const debouncedValue = useDebounce(value, debounceMs);
+
+  useEffect(() => {
+    column.setFilterValue(debouncedValue || undefined);
+  }, [debouncedValue, column]);
+
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded border border-gray-300 px-2 py-1 text-sm
+                 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+    />
+  );
+}
+
