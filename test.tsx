@@ -223,3 +223,56 @@ export function TextFilter<TData>({
   );
 }
 
+import { useState } from "react";
+import { Column } from "@tanstack/react-table";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
+import { Funnel } from "lucide-react";
+
+interface IconTextFilterProps<TData> {
+  column: Column<TData, unknown>;
+}
+
+export function IconTextFilter<TData>({ column }: IconTextFilterProps<TData>) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState((column.getFilterValue() as string) ?? "");
+
+  // Check if filter is applied
+  const isFiltered = Boolean(column.getFilterValue());
+
+  const applyFilter = () => {
+    column.setFilterValue(value || undefined);
+    setOpen(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      applyFilter();
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className={`p-1 rounded hover:bg-gray-100 ${isFiltered ? "text-blue-500" : "text-gray-500"}`}
+        >
+          <Funnel className="h-4 w-4" />
+        </button>
+      </PopoverTrigger>
+
+      <PopoverContent className="p-2 w-40">
+        <Input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Filter..."
+          className="text-sm"
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+
