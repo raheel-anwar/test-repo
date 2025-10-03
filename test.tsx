@@ -275,4 +275,164 @@ export function IconTextFilter<TData>({ column }: IconTextFilterProps<TData>) {
   );
 }
 
+import { FilterFn } from "@tanstack/react-table";
+import { DateRange } from "./DateRangeFilter";
+
+export const dateRangeFilter: FilterFn<any> = (row, columnId, value: DateRange) => {
+  if (!value) return true;
+
+  const cellValue = row.getValue(columnId);
+  if (!cellValue) return false;
+
+  const cellDate = new Date(cellValue);
+
+  if (value.from && cellDate < value.from) return false;
+  if (value.to && cellDate > value.to) return false;
+
+  return true;
+};
+
+const table = useReactTable({
+  data,
+  columns,
+  filterFns: { dateRange: dateRangeFilter },
+  getCoreRowModel: getCoreRowModel(),
+  getFilteredRowModel: getFilteredRowModel(),
+});
+
+const columns = [
+  {
+    accessorKey: "createdAt",
+    header: "Created At",
+    filterFn: "dateRange",  // use custom filterFn
+    meta: {
+      filterType: "date",   // tells the header renderer which filter UI to use
+      enableFilter: true,
+    },
+  },
+];
+
+"use client"
+
+import * as React from "react"
+import { Column } from "@tanstack/react-table"
+import { Funnel } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { format, parseISO, set } from "date-fns"
+
+interface DateTimeRange {
+  from?: Date
+  to?: Date
+}
+
+interface DateTimeRangeFilterProps<TData> {
+  column: Column<TData, unknown>
+}
+
+export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<TData>) {
+  const currentValue = column.getFilterValue() as DateTimeRange | undefined
+  const [open, setOpen] = React.useState(false)
+  const [range, setRange] = React.useState<DateTimeRange>(currentValue ?? {})
+
+  const filterType = (column.columnDef.meta as any)?.filterType ?? "date"
+  const isDateTime = filterType === "datetime"
+
+  const isFiltered = Boolean(currentValue?.from || currentValue?.to)
+
+  const applyFilter = () => {
+    column.setFilterValue(range.from || range.to ? range : undefined)
+    setOpen(false)
+  }
+
+  const resetFilter = () => {
+    setRange({})
+    column.setFilterValue(undefined)
+  }
+
+  // Combine calendar date + time string into one Date
+  const combineDateTime = (date: Date | undefined, time: string) => {
+    if (!date) return undefined
+    if (!isDateTime) return set(date, { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 })
+
+    const [hours, minutes, seconds] = time.split(":").map(Number)
+    return set(date, { hours, minutes, seconds: seconds || 0, milliseconds: 0 })
+  }
+
+  // Format short label using date-fns
+  const formatShortLabel = (range: DateTimeRange) => {
+    if (!range.from && !range.to) return "Select date"
+    const fmt = isDateTime ? "MM/dd/yy HH:mm" : "MM/dd/yy"
+    const fromStr = range.from ? format(range.from, fmt) : "-"
+    const toStr = range.to ? format(range.to, fmt) : "-"
+    return `${fromStr} → ${toStr}`
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className={`w-40 justify-between font-normal ${isFiltered ? "text-blue-500" : "text-gray-700"}`}
+        >
+          {formatShortLabel(range)}
+          <Funnel className="h-4 w-4" />
+        </Button>
+      </PopoverTrigger>
+
+      <PopoverContent className="w-auto p-4 space-y-4" align="start">
+        {["from", "to"].map((key) => {
+          const label = key === "from" ? "From" : "To"
+          const dateValue = range[key as keyof DateTimeRange] ?? undefined
+          const timeValue = dateValue ? format(dateValue, "HH:mm:ss") : "00:00:00"
+
+          return (
+            <div key={key} className="flex flex-col gap-2">
+              <Label>{label}</Label>
+              <div className="flex gap-2">
+                <Calendar
+                  mode="single"
+                  selected={dateValue}
+                  captionLayout="dropdown"
+                  onSelect={(date) =>
+                    setRange({
+                      ...range,
+                      [key]: combineDateTime(date, timeValue),
+                    })
+                  }
+                />
+                {isDateTime && (
+                  <Input
+                    type="time"
+                    step="1"
+                    value={timeValue}
+                    onChange={(e) =>
+                      setRange({
+                        ...range,
+                        [key]: combineDateTime(dateValue, e.target.value),
+                      })
+                    }
+                    className="w-24"
+                  />
+                )}
+              </div>
+            </div>
+          )
+        })}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" onClick={resetFilter}>
+            Reset
+          </Button>
+          <Button size="sm" onClick={applyFilter}>
+            Apply
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
