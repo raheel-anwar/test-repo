@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { setHours, setMinutes, setSeconds, format } from "date-fns"
 
-interface DateTimeRange {
+export interface DateTimeRange {
   from?: Date
   to?: Date
 }
@@ -20,35 +20,40 @@ interface DateTimeRangeFilterProps<TData> {
 }
 
 export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<TData>) {
-  const currentValue = column.getFilterValue() as DateTimeRange | undefined
-  const [open, setOpen] = React.useState(false)
-  const [range, setRange] = React.useState<DateTimeRange>(currentValue ?? {})
-
   const filterType = (column.columnDef.meta as any)?.filterType ?? "date"
   const isDateTime = filterType === "datetime"
 
+  // Initialize range from currently applied filter
+  const currentValue = column.getFilterValue() as DateTimeRange | undefined
+  const [range, setRange] = React.useState<DateTimeRange>(currentValue ?? {})
+  const [popoverOpen, setPopoverOpen] = React.useState(false)
+
   const isFiltered = Boolean(currentValue?.from || currentValue?.to)
 
+  // Apply / Reset handlers
   const applyFilter = () => {
     column.setFilterValue(range.from || range.to ? range : undefined)
-    setOpen(false)
+    setPopoverOpen(false)
   }
-
   const resetFilter = () => {
     setRange({})
     column.setFilterValue(undefined)
   }
 
+  // Combine date + time using date-fns
   const combineDateTime = (date: Date | undefined, time: string) => {
     if (!date) return undefined
     let dt = date
     if (isDateTime) {
       const [hours, minutes, seconds] = time.split(":").map(Number)
       dt = setSeconds(setMinutes(setHours(dt, hours), minutes), seconds || 0)
+    } else {
+      dt.setHours(0, 0, 0, 0)
     }
     return dt
   }
 
+  // Header short label
   const formatLabel = (range: DateTimeRange) => {
     if (!range.from && !range.to) return "Select date"
     const fmt = isDateTime ? "MM/dd/yy HH:mm" : "MM/dd/yy"
@@ -58,7 +63,8 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+      {/* Header button */}
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -69,6 +75,7 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
         </Button>
       </PopoverTrigger>
 
+      {/* Popover content */}
       <PopoverContent className="w-auto p-4 space-y-4" align="start">
         {(["from", "to"] as const).map((key) => {
           const label = key === "from" ? "From" : "To"
@@ -80,7 +87,7 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
               <Label>{label}</Label>
 
               <div className="flex gap-2">
-                {/* Date Input with Calendar Popover */}
+                {/* Date input triggers calendar popover */}
                 <Popover>
                   <PopoverTrigger asChild>
                     <Input
@@ -94,7 +101,7 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
                   <PopoverContent className="w-auto p-0">
                     <Calendar
                       mode="single"
-                      selected={dateValue}
+                      selected={dateValue} // show applied filter value
                       captionLayout="dropdown"
                       onSelect={(date) =>
                         setRange({
@@ -106,6 +113,7 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
                   </PopoverContent>
                 </Popover>
 
+                {/* Time input */}
                 {isDateTime && (
                   <Input
                     type="time"
@@ -125,6 +133,7 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
           )
         })}
 
+        {/* Apply / Reset */}
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" onClick={resetFilter}>
             Reset
