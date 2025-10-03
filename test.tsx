@@ -1,104 +1,175 @@
-from pydantic import BaseModel
-from typing import Generic, TypeVar, List, Optional
+// components/table/filters/TextFilter.tsx
+import { Column } from "@tanstack/react-table";
 
-T = TypeVar("T")
-
-class PaginatedResult(BaseModel, Generic[T]):
-    data: List[T]
-    count: int                      # number of items in this page
-    next_page_token: Optional[str] = None
-    approx_total: Optional[int] = None  # approximate total of filtered items
-
-class WorkflowService:
-    def __init__(self, temporal_client: Client):
-        self.client = temporal_client
-
-    @staticmethod
-    def build_query(filters: Optional[WorkflowFilter]) -> str:
-        if not filters:
-            return ""
-        query_parts = []
-        if filters.workflow_id__eq:
-            query_parts.append(f"WorkflowId='{filters.workflow_id__eq}'")
-        if filters.workflow_type__icontains:
-            query_parts.append(f"WorkflowType LIKE '%{filters.workflow_type__icontains}%'")
-        if filters.status__in:
-            statuses = " OR ".join(f"ExecutionStatus='{s.value}'" for s in filters.status__in)
-            query_parts.append(f"({statuses})")
-        if filters.start_time__gte:
-            query_parts.append(f"StartTime>='{filters.start_time__isoformat()}'")
-        if filters.start_time__lte:
-            query_parts.append(f"StartTime<='{filters.start_time__isoformat()}'")
-        if filters.end_time__gte:
-            query_parts.append(f"CloseTime>='{filters.end_time__isoformat()}'")
-        if filters.end_time__lte:
-            query_parts.append(f"CloseTime<='{filters.end_time__isoformat()}'")
-        return " AND ".join(query_parts)
-
-    async def list_workflows(
-        self,
-        filters: Optional[WorkflowFilter] = None,
-        page_size: int = DEFAULT_PAGE_SIZE,
-        next_page_token: Optional[bytes] = None,
-        sorting: Optional[SortingParams] = None,
-        approximate_total: bool = True
-    ) -> PaginatedResult[WorkflowExecutionRead]:
-
-        page_size = min(page_size, MAX_PAGE_SIZE)
-        query = self.build_query(filters)
-
-        # Fetch workflows from Temporal
-        response = await self.client.list_workflow_executions(
-            query=query,
-            page_size=page_size,
-            next_page_token=next_page_token
-        )
-
-        workflows = [
-            WorkflowExecutionRead(
-                workflow_id=w.execution.workflow_id,
-                run_id=w.execution.run_id,
-                workflow_type=w.type.name,
-                status=WorkflowStatus(w.status.name),
-                start_time=w.start_time,
-                end_time=w.end_time
-            )
-            for w in response.executions
-        ]
-
-        # Optional in-memory sort
-        if sorting and sorting.sort_by:
-            reverse = sorting.sort_order == "desc"
-            workflows.sort(key=lambda w: getattr(w, sorting.sort_by, None), reverse=reverse)
-
-        # Approximate total
-        total_estimate = len(workflows)
-        if approximate_total:
-            # Fetch one additional workflow to see if there are more pages
-            if response.next_page_token:
-                total_estimate += 1  # we know there’s at least one more workflow
-
-        return PaginatedResult(
-            data=workflows,
-            count=len(workflows),
-            next_page_token=response.next_page_token.decode() if response.next_page_token else None,
-            approx_total=total_estimate
-        )
+export function TextFilter<TData>({ column }: { column: Column<TData, unknown> }) {
+  return (
+    <input
+      type="text"
+      value={(column.getFilterValue() as string) ?? ""}
+      onChange={(e) => column.setFilterValue(e.target.value || undefined)}
+      placeholder={`Filter...`}
+      className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+    />
+  );
+}
 
 
-@router.get("/workflows", response_model=PaginatedResult[WorkflowExecutionRead])
-async def list_workflows(
-    filters: WorkflowFilter = Depends(),
-    page_size: int = DEFAULT_PAGE_SIZE,
-    next_page_token: Optional[str] = None,
-    sorting: SortingParams = Depends(),
-    temporal_client: Client = Depends(get_temporal_client)
-):
-    service = WorkflowService(temporal_client)
-    result = await service.list_workflows(
-        filters=filters,
-        page_size=page_size,
-        next_page_token=next_page_token.encode() if next_page_token else None,
-        sorting=sorting,
-    )
-    return result
+// components/table/filters/SelectFilter.tsx
+import { Column } from "@tanstack/react-table";
+
+export function SelectFilter<TData>({
+  column,
+  options,
+}: {
+  column: Column<TData, unknown>;
+  options: string[];
+}) {
+  return (
+    <select
+      value={(column.getFilterValue() as string) ?? ""}
+      onChange={(e) => column.setFilterValue(e.target.value || undefined)}
+      className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+    >
+      <option value="">All</option>
+      {options.map((opt) => (
+        <option key={opt} value={opt}>
+          {opt}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// components/table/DataTableColumnHeader.tsx
+import { Column } from "@tanstack/react-table";
+import { ArrowUpDown } from "lucide-react";
+import { TextFilter } from "./filters/TextFilter";
+import { SelectFilter } from "./filters/SelectFilter";
+
+type FilterType = "text" | "select";
+
+interface DataTableColumnHeaderProps<TData, TValue> {
+  column: Column<TData, TValue>;
+}
+
+export function DataTableColumnHeader<TData, TValue>({
+  column,
+}: DataTableColumnHeaderProps<TData, TValue>) {
+  const title = column.columnDef.header as string;
+  const meta = column.columnDef.meta as {
+    enableFilter?: boolean;
+    filterType?: FilterType;
+    filterOptions?: string[];
+  };
+
+  const enableFilter = meta?.enableFilter ?? false;
+  const filterType = meta?.filterType ?? "text";
+
+  return (
+    <div className="flex flex-col items-start">
+      {/* Header title + sorting */}
+      <div
+        className="flex items-center gap-2 cursor-pointer"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        <span className="font-semibold">{title}</span>
+        {column.getIsSorted() && (
+          <ArrowUpDown
+            className={`h-3 w-3 ${
+              column.getIsSorted() === "asc" ? "rotate-180" : ""
+            }`}
+          />
+        )}
+      </div>
+
+      {/* Filter */}
+      {enableFilter && column.getCanFilter() && (
+        <div className="mt-1 w-full">
+          {filterType === "text" && <TextFilter column={column} />}
+          {filterType === "select" && (
+            <SelectFilter column={column} options={meta?.filterOptions ?? []} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const columns: ColumnDef<Execution>[] = [
+  {
+    accessorKey: "id",
+    header: ({ column }) => <DataTableColumnHeader column={column} />,
+    meta: { enableFilter: true, filterType: "text" },
+  },
+  {
+    accessorKey: "name",
+    header: ({ column }) => <DataTableColumnHeader column={column} />,
+    meta: { enableFilter: true, filterType: "text" },
+  },
+  {
+    accessorKey: "status",
+    header: ({ column }) => <DataTableColumnHeader column={column} />,
+    meta: {
+      enableFilter: true,
+      filterType: "select",
+      filterOptions: ["Running", "Failed", "Pending"],
+    },
+  },
+  {
+    accessorKey: "owner",
+    header: ({ column }) => <DataTableColumnHeader column={column} />,
+    meta: { enableFilter: false },
+  },
+];
+
+// components/DataTable/filters/DateRangeFilter.tsx
+import { Column } from "@tanstack/react-table";
+
+export function DateRangeFilter<TData>({ column }: { column: Column<TData, unknown> }) {
+  const value = (column.getFilterValue() as { from?: string; to?: string }) ?? {};
+
+  return (
+    <div className="flex gap-2">
+      {/* From Date */}
+      <input
+        type="date"
+        value={value.from ?? ""}
+        onChange={(e) =>
+          column.setFilterValue({
+            ...value,
+            from: e.target.value || undefined,
+          })
+        }
+        className="w-full rounded border border-gray-300 px-2 py-1 text-sm
+                   focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+      />
+
+      {/* To Date */}
+      <input
+        type="date"
+        value={value.to ?? ""}
+        onChange={(e) =>
+          column.setFilterValue({
+            ...value,
+            to: e.target.value || undefined,
+          })
+        }
+        className="w-full rounded border border-gray-300 px-2 py-1 text-sm
+                   focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+      />
+    </div>
+  );
+}
+
+
+// types/table.d.ts
+import "@tanstack/react-table";
+
+declare module "@tanstack/react-table" {
+  interface ColumnMeta<TData extends RowData, TValue> {
+    enableFilter?: boolean;
+    filterType?: "text" | "select" | "dateRange";
+    filterOptions?: string[];
+  }
+}
+
