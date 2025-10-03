@@ -436,3 +436,137 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
   )
 }
 
+"use client"
+
+import * as React from "react"
+import { Column } from "@tanstack/react-table"
+import { Funnel } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+
+interface DateTimeRange {
+  from?: Date
+  to?: Date
+}
+
+interface DateTimeRangeFilterProps<TData> {
+  column: Column<TData, unknown>
+}
+
+export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<TData>) {
+  const currentValue = column.getFilterValue() as DateTimeRange | undefined
+  const [open, setOpen] = React.useState(false)
+  const [range, setRange] = React.useState<DateTimeRange>(currentValue ?? {})
+
+  const filterType = (column.columnDef.meta as any)?.filterType ?? "date" // default to date
+  const isDateTime = filterType === "datetime"
+
+  const isFiltered = Boolean(currentValue?.from || currentValue?.to)
+
+  const applyFilter = () => {
+    column.setFilterValue(range.from || range.to ? range : undefined)
+    setOpen(false)
+  }
+
+  const resetFilter = () => {
+    setRange({})
+    column.setFilterValue(undefined)
+  }
+
+  // Helpers to combine date + time from separate inputs
+  const combineDateTime = (date: Date | undefined, time: string) => {
+    if (!date) return undefined
+    const dt = new Date(date)
+    if (isDateTime) {
+      const [hours, minutes, seconds] = time.split(":").map(Number)
+      dt.setHours(hours, minutes, seconds || 0)
+    } else {
+      dt.setHours(0, 0, 0, 0)
+    }
+    return dt
+  }
+
+  // Helper to render short label for header
+  const formatShortLabel = (range: DateTimeRange) => {
+    if (!range.from && !range.to) return "Select date"
+
+    const options: Intl.DateTimeFormatOptions = isDateTime
+      ? { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
+      : { year: "2-digit", month: "2-digit", day: "2-digit" }
+
+    const fromStr = range.from ? range.from.toLocaleString(undefined, options) : "-"
+    const toStr = range.to ? range.to.toLocaleString(undefined, options) : "-"
+
+    return `${fromStr} → ${toStr}`
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className={`w-40 justify-between font-normal ${isFiltered ? "text-blue-500" : "text-gray-700"}`}
+        >
+          {formatShortLabel(range)}
+          <Funnel className="h-4 w-4" />
+        </Button>
+      </PopoverTrigger>
+
+      <PopoverContent className="w-auto p-4 space-y-4" align="start">
+        {["from", "to"].map((key) => {
+          const label = key === "from" ? "From" : "To"
+          const dateValue = range[key as keyof DateTimeRange] ?? undefined
+          const timeValue = dateValue
+            ? dateValue.toTimeString().split(" ")[0]
+            : "00:00:00"
+
+          return (
+            <div key={key} className="flex flex-col gap-2">
+              <Label>{label}</Label>
+              <div className="flex gap-2">
+                <Calendar
+                  mode="single"
+                  selected={dateValue}
+                  captionLayout="dropdown"
+                  onSelect={(date) =>
+                    setRange({
+                      ...range,
+                      [key]: combineDateTime(date, timeValue),
+                    })
+                  }
+                />
+                {isDateTime && (
+                  <Input
+                    type="time"
+                    step="1"
+                    value={timeValue}
+                    onChange={(e) =>
+                      setRange({
+                        ...range,
+                        [key]: combineDateTime(dateValue, e.target.value),
+                      })
+                    }
+                    className="w-24"
+                  />
+                )}
+              </div>
+            </div>
+          )
+        })}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" onClick={resetFilter}>
+            Reset
+          </Button>
+          <Button size="sm" onClick={applyFilter}>
+            Apply
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
