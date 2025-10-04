@@ -146,3 +146,71 @@ export function DateTimeRangeFilter<TData>({ column }: DateTimeRangeFilterProps<
     </Popover>
   )
 }
+
+"use client"
+
+import * as React from "react"
+import { Input } from "@/components/ui/input"
+import { Calendar } from "@/components/ui/calendar"
+import { parseISO, setHours, setMinutes, setSeconds, format } from "date-fns"
+
+interface DateTimePickerProps {
+  value?: string            // ISO string
+  onChange: (iso: string | undefined) => void
+  className?: string
+}
+
+export function DateTimePicker({ value, onChange, className }: DateTimePickerProps) {
+  // Initialize date and time as strings
+  const initialDateObj = value ? parseISO(value) : undefined
+  const [dateStr, setDateStr] = React.useState<string>(
+    initialDateObj ? format(initialDateObj, "yyyy-MM-dd") : ""
+  )
+  const [timeStr, setTimeStr] = React.useState<string>(
+    initialDateObj ? format(initialDateObj, "HH:mm:ss") : "00:00:00"
+  )
+
+  // Combine date + time and emit ISO string
+  const emitChange = (dateStr: string, timeStr: string) => {
+    if (!dateStr) {
+      onChange(undefined)
+      return
+    }
+    const [hours, minutes, seconds] = timeStr.split(":").map(Number)
+    let dt = parseISO(dateStr + "T00:00:00")
+    dt = setSeconds(setMinutes(setHours(dt, hours), minutes), seconds || 0)
+    onChange(dt.toISOString())
+  }
+
+  const handleDateChange = (date: Date) => {
+    const formatted = format(date, "yyyy-MM-dd")
+    setDateStr(formatted)
+    emitChange(formatted, timeStr)
+  }
+
+  const handleTimeChange = (t: string) => {
+    setTimeStr(t)
+    if (dateStr) emitChange(dateStr, t)
+  }
+
+  return (
+    <div className={`flex items-center gap-2 ${className || ""}`}>
+      {/* Inline Calendar */}
+      <Calendar
+        mode="single"
+        selected={dateStr ? parseISO(dateStr) : undefined}
+        captionLayout="dropdown"
+        onSelect={handleDateChange}
+      />
+
+      {/* Time Input */}
+      <Input
+        type="time"
+        step="1"
+        value={timeStr}
+        onChange={(e) => handleTimeChange(e.target.value)}
+        className="w-24"
+      />
+    </div>
+  )
+}
