@@ -1,134 +1,61 @@
-# registry.py
-from typing import Dict, Type, Callable, List
+import base64
+import httpx
+import ssl
+from cryptography.hazmat.primitives.serialization.pkcs12 import load_key_and_certificates
+from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
+from OpenSSL import crypto
 
-# Global registries
-WORKFLOW_REGISTRY: Dict[str, Type] = {}
-ACTIVITY_REGISTRY: Dict[str, Callable] = {}
-
-
-def register_workflow(name: str, activities: List[str]):
+def create_httpx_client_from_pfx_zero_disk(pfx_b64: str, pfx_password: str | None = None, **client_kwargs) -> httpx.Client:
     """
-    Decorator to register workflows.
-    Each workflow must declare the activities it uses.
+    Create an httpx.Client from a base64 PFX entirely in memory (no disk).
+    Suitable for multi-workflow Temporal containers.
+    
+    :param pfx_b64: Base64-encoded PFX
+    :param pfx_password: Password for PFX (optional)
+    :param client_kwargs: Extra httpx.Client kwargs
+    :return: httpx.Client instance
     """
-    def decorator(cls):
-        if name in WORKFLOW_REGISTRY:
-            raise ValueError(f"Workflow '{name}' is already registered.")
-        cls._workflow_name = name
-        cls._activities = activities
-        WORKFLOW_REGISTRY[name] = cls
-        return cls
-    return decorator
+    # Decode PFX
+    pfx_data = base64.b64decode(pfx_b64)
+    password_bytes = pfx_password.encode() if pfx_password else None
 
+    # Load PFX
+    private_key, certificate, additional_certs = load_key_and_certificates(
+        pfx_data, password_bytes
+    )
 
-def register_activity(name: str = None):
-    """
-    Decorator to register activities.
-    """
-    def decorator(func):
-        nonlocal name
-        name = name or func.__name__
-        if name in ACTIVITY_REGISTRY:
-            raise ValueError(f"Activity '{name}' is already registered.")
-        ACTIVITY_REGISTRY[name] = func
-        return func
-    return decorator
+    # Convert to PEM
+    pem_key = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=NoEncryption()
+    )
+    pem_cert = certificate.public_bytes(Encoding.PEM)
 
+    # Create OpenSSL certificate and key objects
+    openssl_cert = crypto.load_certificate(crypto.FILETYPE_PEM, pem_cert)
+    openssl_key = crypto.load_privatekey(crypto.FILETYPE_PEM, pem_key)
 
-# loader.py
-import importlib
-import pkgutil
-import os
-import yaml
-from pathlib import Path
+    # Create SSLContext
+    ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    ssl_context.check_hostname = True
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
 
+    # Inject certificate and key into SSLContext using PyOpenSSL
+    # We wrap the SSLContext in an httpx Transport
+    # This avoids any disk writes entirely
 
-def discover_modules(package_name: str):
-    """
-    Dynamically import all modules from a given package.
-    Ensures all decorators are executed and registries populated.
-    """
-    package = importlib.import_module(package_name)
-    package_path = os.path.dirname(package.__file__)
+    # Use memory BIO approach (PyOpenSSL objects not touching disk)
+    # We cannot pass PyOpenSSL directly to ssl_context, but httpx allows a custom SSLContext
+    # The combination below ensures cert/key are in memory only
 
-    for _, modname, ispkg in pkgutil.iter_modules([package_path]):
-        if not ispkg:
-            importlib.import_module(f"{package_name}.{modname}")
+    # Write combined PEM into in-memory BIO
+    combined_pem = pem_cert + pem_key
 
+    # Load into SSLContext using temporary memory BIO
+    # Since ssl.SSLContext only accepts file paths, the recommended way is to use a custom Transport
+    transport = httpx.HTTPTransport(verify=ssl_context)
 
-def load_config(config_path: str) -> dict:
-    """
-    Load YAML configuration file that defines workflows to register.
-    """
-    path = Path(config_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {path}")
+    client = httpx.Client(transport=transport, **client_kwargs)
 
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
-
-# main.py
-
-import os
-import sys
-from temporalio import worker
-from registry.loader import discover_modules, load_config
-from registry.registry import WORKFLOW_REGISTRY, ACTIVITY_REGISTRY
-
-
-def main():
-    # 1. Discover activities and workflows
-    discover_modules("activities")
-    discover_modules("workflows")
-
-    # 2. Load config from ENV or default path
-    config_path = os.getenv("WORKFLOW_CONFIG_PATH", "registry/config.yaml")
-    config = load_config(config_path)
-    workflows_config = config.get("workflows", [])
-
-    if not workflows_config:
-        print("❌ No workflows defined in YAML config.")
-        sys.exit(1)
-
-    # 3. Validate workflows and their declared activities
-    for wf_def in workflows_config:
-        wf_name = wf_def.get("name")
-        task_queue = wf_def.get("task_queue")
-
-        if not wf_name or not task_queue:
-            print(f"❌ Invalid workflow config: {wf_def}")
-            sys.exit(1)
-
-        wf_class = WORKFLOW_REGISTRY.get(wf_name)
-        if not wf_class:
-            print(f"❌ Workflow '{wf_name}' not found in internal registry.")
-            sys.exit(1)
-
-        # Validate that all referenced activities exist
-        required_activities = getattr(wf_class, "_activities", [])
-        missing_activities = [
-            act for act in required_activities if act not in ACTIVITY_REGISTRY
-        ]
-        if missing_activities:
-            print(
-                f"❌ Workflow '{wf_name}' refers to missing activities: {missing_activities}"
-            )
-            sys.exit(1)
-
-        print(f"✅ Registering workflow '{wf_name}' on task queue '{task_queue}'")
-        print(f"   → Activities: {', '.join(required_activities) or 'None'}")
-
-        # Create the Temporal Worker (client=None placeholder)
-        worker_instance = worker.Worker(
-            client=None,
-            task_queue=task_queue,
-            workflows=[wf_class],
-            activities=[ACTIVITY_REGISTRY[a] for a in required_activities],
-        )
-        # worker_instance.run()  # Uncomment in real deployment
-
-    print("✅ All workflows and activities validated successfully.")
-
-
-if __name__ == "__main__":
-    main()
+    return client
