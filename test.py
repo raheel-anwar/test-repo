@@ -1,14 +1,11 @@
 import base64
 import ssl
 import tempfile
+import os
 from contextlib import contextmanager
 from typing import Optional, Generator
-
 from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    PrivateFormat,
-    NoEncryption,
-    pkcs12
+    Encoding, PrivateFormat, NoEncryption, pkcs12
 )
 
 
@@ -17,40 +14,59 @@ def client_certificate_context(
     pfx_base64: str,
     password: Optional[str] = None
 ) -> Generator[ssl.SSLContext, None, None]:
+    """
+    Provides a cross-platform SSLContext from an in-memory PFX string.
+
+    Works on Windows, Linux, macOS. No certs linger on disk.
+    """
+    # decode PFX
     pfx_bytes = base64.b64decode(pfx_base64)
     pwd_bytes = password.encode() if password else None
 
+    # extract key, cert, CA
     private_key, certificate, ca_chain = pkcs12.load_key_and_certificates(
-        data=pfx_bytes,
-        password=pwd_bytes
+        pfx_bytes, pwd_bytes
     )
 
-    private_key_pem = private_key.private_bytes(
-        Encoding.PEM,
-        PrivateFormat.PKCS8,
-        NoEncryption()
+    key_pem = private_key.private_bytes(
+        Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
     )
-    certificate_pem = certificate.public_bytes(Encoding.PEM)
+    cert_pem = certificate.public_bytes(Encoding.PEM)
 
-    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
-    with tempfile.NamedTemporaryFile(delete=True) as key_file, \
-         tempfile.NamedTemporaryFile(delete=True) as cert_file:
+    # cross-platform temp files
+    key_file = tempfile.NamedTemporaryFile(delete=False)
+    cert_file = tempfile.NamedTemporaryFile(delete=False)
 
-        key_file.write(private_key_pem)
-        cert_file.write(certificate_pem)
-        key_file.flush()
-        cert_file.flush()
+    try:
+        key_file.write(key_pem)
+        cert_file.write(cert_pem)
+        key_file.close()
+        cert_file.close()
 
-        context.load_cert_chain(
-            certfile=cert_file.name,
-            keyfile=key_file.name
-        )
+        ctx.load_cert_chain(certfile=cert_file.name, keyfile=key_file.name)
 
+        # load extra CA certs if present
         if ca_chain:
             for ca in ca_chain:
-                context.load_verify_locations(
+                ctx.load_verify_locations(
                     cadata=ca.public_bytes(Encoding.PEM).decode()
                 )
 
-        yield context
+        yield ctx
+
+    finally:
+        # Secure cleanup: overwrite + remove
+        for path in (key_file.name, cert_file.name):
+            try:
+                if os.path.exists(path):
+                    # overwrite with zeros
+                    with open(path, "ba+", buffering=0) as f:
+                        f.seek(0)
+                        size = f.tell()
+                        f.seek(0)
+                        f.write(b"\x00" * size)
+                    os.remove(path)
+            except Exception:
+                pass
