@@ -59,3 +59,48 @@ def create_httpx_client_from_pfx_zero_disk(pfx_b64: str, pfx_password: str | Non
     client = httpx.Client(transport=transport, **client_kwargs)
 
     return client
+
+
+import base64
+import ssl
+from typing import Optional
+from cryptography.hazmat.primitives.serialization import (
+    Encoding, PrivateFormat, NoEncryption, pkcs12
+)
+
+def ssl_context_from_pfx(
+    pfx_base64: str,
+    password: Optional[str] = None
+) -> ssl.SSLContext:
+    """
+    Create an SSLContext from a base64-encoded PFX (PKCS#12) string
+    without writing anything to disk.
+
+    :param pfx_base64: Base64 encoded PFX certificate
+    :param password: PFX password or None
+    :return: ssl.SSLContext ready for httpx
+    """
+    pfx_bytes = base64.b64decode(pfx_base64)
+    pwd_bytes = password.encode() if password else None
+
+    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(
+        pfx_bytes, pwd_bytes
+    )
+
+    # Convert to PEM in memory
+    private_key_pem = private_key.private_bytes(
+        Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+    )
+    certificate_pem = certificate.public_bytes(Encoding.PEM)
+
+    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    context.load_cert_chain(certfile=certificate_pem, keyfile=private_key_pem)
+
+    # Load CA certificates if provided
+    if additional_certs:
+        for ca in additional_certs:
+            context.load_verify_locations(
+                cadata=ca.public_bytes(Encoding.PEM).decode()
+            )
+
+    return context
