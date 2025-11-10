@@ -1,71 +1,33 @@
-from typing import List, Any, Dict
-from pydantic import BaseModel
+from functools import wraps
+from fastapi import HTTPException, Depends
+
+def org_allowed():
+    async def dependency(request):
+        user = request.state.user
+        role = user.role
+        return role.abac_constraints.get("organization", "all")
+    return dependency
 
 
-class ExecutionEvent(BaseModel):
-    name: str
-    status: str          # RUNNING | COMPLETED | FAILED
-    message: str | None
-    details: Any | None
-    error_message: str | None
-    error_trace: str | None
+def require_org_access():
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, allowed_orgs=Depends(org_allowed()), **kwargs):
+            # auto-detect “org” from path params
+            org = kwargs.get("org")
 
+            if org is None:
+                raise HTTPException(status_code=500, detail="Org param missing")
 
-# Mapping of Step Functions event types to generic statuses
-_STATUS_MAP = {
-    "ExecutionStarted": "RUNNING",
-    "ExecutionSucceeded": "COMPLETED",
-    "ExecutionFailed": "FAILED",
-    "TaskStateEntered": "RUNNING",
-    "TaskStateExited": "COMPLETED",
-    "TaskScheduled": "RUNNING",
-    "TaskStarted": "RUNNING",
-    "TaskSucceeded": "COMPLETED",
-    "TaskFailed": "FAILED",
-    "LambdaFunctionFailed": "FAILED",
-    "LambdaFunctionStarted": "RUNNING",
-    "LambdaFunctionSucceeded": "COMPLETED",
-}
+            if allowed_orgs != "all":
+                if isinstance(allowed_orgs, list):
+                    if org not in allowed_orgs:
+                        raise HTTPException(status_code=403, detail="Org access denied")
+                else:
+                    if org != allowed_orgs:
+                        raise HTTPException(status_code=403, detail="Org access denied")
 
+            return await func(*args, **kwargs)
 
-def parse_stepfn_history(events: List[Dict]) -> List[ExecutionEvent]:
-    parsed: List[ExecutionEvent] = []
-
-    for ev in events:
-        ev_type = ev.get("type")
-        ev_details = ev.get(ev_type + "EventDetails", {})
-
-        status = _STATUS_MAP.get(ev_type, "RUNNING")
-
-        error_message = None
-        error_trace = None
-        message = None
-        details = None
-
-        # Error details
-        if "error" in ev_details or "cause" in ev_details:
-            error_message = ev_details.get("error")
-            error_trace = ev_details.get("cause")
-        else:
-            # Normal details
-            # Common payload fields: input, output, scheduledEventDetails, etc.
-            message = ev_details.get("name") or ev_details.get("resource") or ev_type
-            details = (
-                ev_details.get("input")
-                or ev_details.get("output")
-                or ev_details.get("parameters")
-                or ev_details
-            )
-
-        parsed.append(
-            ExecutionEvent(
-                name=ev_type,
-                status=status,
-                message=message,
-                details=details,
-                error_message=error_message,
-                error_trace=error_trace,
-            )
-        )
-
-    return parsed
+        return wrapper
+    return decorator
