@@ -4,13 +4,16 @@ import { Table } from '@tanstack/react-table';
 
 export function useTableExport<TData>(table: Table<TData>) {
   /**
-   * Exports the table to CSV
+   * Exports the table to CSV using meta.displayName as header
    */
   const exportToCSV = useCallback(() => {
     if (!table) return;
 
-    // 1️⃣ Get all column IDs for headers
-    const headers = table.getAllColumns().map(col => col.id);
+    // 1️⃣ Get all columns for headers
+    const columns = table.getAllColumns();
+
+    // Use meta.displayName if present, fallback to column.id
+    const headers = columns.map(col => col.columnDef.meta?.displayName ?? col.id);
 
     // 2️⃣ Get rows after filtering & sorting (pre-pagination)
     const rows = table.getPrePaginationRowModel().rows;
@@ -19,9 +22,9 @@ export function useTableExport<TData>(table: Table<TData>) {
     const csvContent = [
       headers.join(','), // header row
       ...rows.map(row =>
-        headers
-          .map(header => {
-            const val = row.getValue(header);
+        columns
+          .map(col => {
+            const val = row.getValue(col.id);
             return `"${val !== undefined && val !== null ? val : ''}"`; // quote values
           })
           .join(',')
