@@ -59,3 +59,20 @@ async def audit_log_middleware(request: Request, call_next):
             db.close()
 
     return response
+
+from typing import Mapping, Dict
+
+SENSITIVE_HEADERS = {"authorization", "cookie", "x-api-key", "set-cookie"}
+
+def sanitize_headers(headers: Mapping[str, str]) -> Dict[str, str]:
+    """
+    Returns a sanitized copy of HTTP headers for logging purposes.
+    Sensitive headers like Authorization or Cookie are removed.
+    """
+    sanitized = {}
+    for key, value in headers.items():
+        if key.lower() in SENSITIVE_HEADERS:
+            sanitized[key] = "***"  # mask sensitive value
+        else:
+            sanitized[key] = value
+    return sanitized
