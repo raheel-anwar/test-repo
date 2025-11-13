@@ -1,33 +1,54 @@
-from functools import wraps
-from fastapi import HTTPException, Depends
+# app/middleware/audit_middleware.py
+import time
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import Request
+from jose import jwt, JWTError
+from app.services.audit import log_audit
+from app.core.config import settings  # contains SECRET_KEY and ALGORITHM
 
-def org_allowed():
-    async def dependency(request):
-        user = request.state.user
-        role = user.role
-        return role.abac_constraints.get("organization", "all")
-    return dependency
+class AuditMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request.state.start_time = time.time()
+        auth_header = request.headers.get("Authorization")
+        user = None
 
+        # Try to decode JWT
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer "):]
+            try:
+                payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+                user = {"id": payload.get("sub"), "email": payload.get("email")}
+            except JWTError:
+                # Invalid token: skip logging
+                user = None
 
-def require_org_access():
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, allowed_orgs=Depends(org_allowed()), **kwargs):
-            # auto-detect “org” from path params
-            org = kwargs.get("org")
+        # Only log if user is authenticated
+        if user is None:
+            return await call_next(request)
 
-            if org is None:
-                raise HTTPException(status_code=500, detail="Org param missing")
+        response_body = None
+        error = None
 
-            if allowed_orgs != "all":
-                if isinstance(allowed_orgs, list):
-                    if org not in allowed_orgs:
-                        raise HTTPException(status_code=403, detail="Org access denied")
-                else:
-                    if org != allowed_orgs:
-                        raise HTTPException(status_code=403, detail="Org access denied")
+        try:
+            response = await call_next(request)
 
-            return await func(*args, **kwargs)
+            # Read response body
+            raw_body = b"".join([chunk async for chunk in response.body_iterator])
+            response_body = raw_body.decode(errors="ignore")
+            response.body_iterator = iter([raw_body])
 
-        return wrapper
-    return decorator
+        except Exception as e:
+            error = str(e)
+            raise
+
+        finally:
+            await log_audit(
+                user=user,
+                request=request,
+                response=response,
+                request_body=(await request.json() if request.method in ("POST", "PUT", "PATCH") else None),
+                response_body=response_body,
+                error=error
+            )
+
+        return response
