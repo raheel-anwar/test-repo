@@ -1,41 +1,51 @@
-# Top-level EditorConfig for Python enterprise project
-root = true
+[build-system]
+requires = ["setuptools>=70.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-# --------------------------------------------------
-# General files
-# --------------------------------------------------
-[*]
-charset = utf-8
-end_of_line = lf
-insert_final_newline = true
-trim_trailing_whitespace = true
+[project]
+name = "app-common"
+version = "0.1.0"
+description = "Shared Python utilities, enums, and database helpers for internal services."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
 
-# --------------------------------------------------
-# Python files
-# --------------------------------------------------
-[*.py]
-indent_style = space
-indent_size = 4
+authors = [
+    { name = "Your Team", email = "team@example.com" }
+]
 
-# Ruff will handle line length, unused imports, etc.
+# Dependencies used by ANY project consuming this repo
+dependencies = [
+    "SQLAlchemy>=2.0",
+]
 
-# --------------------------------------------------
-# YAML / CI / Alembic configs
-# --------------------------------------------------
-[*.yml]
-[*.yaml]
-indent_style = space
-indent_size = 2
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.5",
+    "black>=24.0",
+    "mypy>=1.9",
+    "types-SQLAlchemy",
+]
 
-# --------------------------------------------------
-# JSON
-# --------------------------------------------------
-[*.json]
-indent_style = space
-indent_size = 2
+[tool.setuptools]
+package-dir = { "" = "src" }
 
-# --------------------------------------------------
-# Markdown
-# --------------------------------------------------
-[*.md]
-trim_trailing_whitespace = false
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["app_common*"]
+
+# (Optional but recommended for consistent formatting)
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
