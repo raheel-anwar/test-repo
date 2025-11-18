@@ -209,3 +209,98 @@ output "ecs_task_definition_arn" {
 output "cloud_map_service_arn" {
   value = var.cloud_map != null ? aws_service_discovery_service.cloud_map[0].arn : null
 }
+
+############################################################
+# MODULE: ecr
+# Enterprise-grade single-file ECR module
+############################################################
+
+############################################################
+# VARIABLES
+############################################################
+variable "name" {
+  description = "Name of the ECR repository"
+  type        = string
+}
+
+variable "tags" {
+  description = "Tags to apply to the ECR repository"
+  type        = map(string)
+  default     = {}
+}
+
+variable "image_tag_mutability" {
+  description = "ECR image tag mutability (MUTABLE or IMMUTABLE)"
+  type        = string
+  default     = "MUTABLE"
+}
+
+variable "lifecycle_policy" {
+  description = "Optional JSON lifecycle policy document to automatically expire images"
+  type        = string
+  default     = null
+}
+
+variable "kms_key_id" {
+  description = "Optional KMS key ID to encrypt the repository"
+  type        = string
+  default     = null
+}
+
+variable "repository_policy" {
+  description = "Optional repository policy JSON"
+  type        = string
+  default     = null
+}
+
+############################################################
+# CREATE ECR REPOSITORY
+############################################################
+resource "aws_ecr_repository" "this" {
+  name                 = var.name
+  image_tag_mutability = var.image_tag_mutability
+  kms_key              = var.kms_key_id
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = var.tags
+}
+
+############################################################
+# OPTIONAL LIFECYCLE POLICY
+############################################################
+resource "aws_ecr_lifecycle_policy" "this" {
+  count      = var.lifecycle_policy != null ? 1 : 0
+  repository = aws_ecr_repository.this.name
+  policy     = var.lifecycle_policy
+}
+
+############################################################
+# OPTIONAL REPOSITORY POLICY
+############################################################
+resource "aws_ecr_repository_policy" "this" {
+  count      = var.repository_policy != null ? 1 : 0
+  repository = aws_ecr_repository.this.name
+  policy     = var.repository_policy
+}
+
+############################################################
+# OUTPUTS
+############################################################
+output "repository_url" {
+  description = "URL of the ECR repository"
+  value       = aws_ecr_repository.this.repository_url
+}
+
+output "repository_arn" {
+  description = "ARN of the ECR repository"
+  value       = aws_ecr_repository.this.arn
+}
+
+output "repository_name" {
+  description = "Name of the ECR repository"
+  value       = aws_ecr_repository.this.name
+}
+
