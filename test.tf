@@ -1,44 +1,30 @@
 ############################################################
-# Networking Module - Single File
-# Creates service security groups for ECS services
+# ALB Module - Single File
 ############################################################
 
 ############################################################
 # Variables
 ############################################################
 variable "name" {
-  description = "Prefix for naming all security groups"
+  description = "Name prefix for ALB resources"
   type        = string
   default     = "app"
 }
 
 variable "vpc_id" {
-  description = "Existing VPC ID"
+  description = "VPC ID where ALB will be deployed"
   type        = string
 }
 
-variable "frontend_port" {
-  description = "Port frontend listens on"
-  type        = number
-  default     = 3000
+variable "subnet_ids" {
+  description = "List of subnet IDs for ALB (public subnets)"
+  type        = list(string)
 }
 
-variable "backend_port" {
-  description = "Port backend listens on"
-  type        = number
-  default     = 8080
-}
-
-variable "job_server_port" {
-  description = "Port job-server listens on"
-  type        = number
-  default     = 9090
-}
-
-variable "backend_to_job_server" {
-  description = "Allow backend to access job-server"
-  type        = bool
-  default     = true
+variable "ingress_cidrs" {
+  description = "Allowed CIDRs for HTTP/HTTPS"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
 }
 
 variable "tags" {
@@ -47,78 +33,27 @@ variable "tags" {
 }
 
 ############################################################
-# ALB Security Group (if needed for ECS tasks to connect)
-# You can disable if ALB SG is in ALB module
+# ALB Security Group
 ############################################################
-# resource "aws_security_group" "alb" {
-#   name        = "${var.name}-alb-sg"
-#   vpc_id      = var.vpc_id
-#   description = "ALB Security Group (if managed here)"
-#   ingress {
-#     description = "HTTP"
-#     from_port   = 80
-#     to_port     = 80
-#     protocol    = "tcp"
-#     cidr_blocks = ["0.0.0.0/0"]
-#   }
-#   ingress {
-#     description = "HTTPS"
-#     from_port   = 443
-#     to_port     = 443
-#     protocol    = "tcp"
-#     cidr_blocks = ["0.0.0.0/0"]
-#   }
-#   egress {
-#     from_port   = 0
-#     to_port     = 0
-#     protocol    = "-1"
-#     cidr_blocks = ["0.0.0.0/0"]
-#   }
-#   tags = var.tags
-# }
-
-############################################################
-# FRONTEND Security Group
-############################################################
-resource "aws_security_group" "frontend" {
-  name        = "${var.name}-frontend-sg"
+resource "aws_security_group" "alb" {
+  name        = "${var.name}-alb-sg"
   vpc_id      = var.vpc_id
-  description = "Frontend ECS service SG (only ALB can reach)"
+  description = "ALB Security Group (HTTP/HTTPS inbound, outbound to ECS tasks)"
 
   ingress {
-    description     = "Allow ALB → Frontend"
-    from_port       = var.frontend_port
-    to_port         = var.frontend_port
-    protocol        = "tcp"
-    # source_security_group_id = aws_security_group.alb.id # if using local ALB SG
-    cidr_blocks     = ["0.0.0.0/0"] # optionally restrict to ALB CIDRs
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = var.tags
-}
-
-############################################################
-# BACKEND Security Group
-############################################################
-resource "aws_security_group" "backend" {
-  name        = "${var.name}-backend-sg"
-  vpc_id      = var.vpc_id
-  description = "Backend ECS service SG (ALB → Backend, Backend → Job-server)"
-
-  ingress {
-    description = "Allow ALB → Backend"
-    from_port   = var.backend_port
-    to_port     = var.backend_port
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
-    # source_security_group_id = aws_security_group.alb.id # if using local ALB SG
-    cidr_blocks = ["0.0.0.0/0"] # optionally restrict to ALB CIDRs
+    cidr_blocks = var.ingress_cidrs
+  }
+
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = var.ingress_cidrs
   }
 
   egress {
@@ -132,51 +67,92 @@ resource "aws_security_group" "backend" {
 }
 
 ############################################################
-# JOB-SERVER Security Group
+# ALB
 ############################################################
-resource "aws_security_group" "job_server" {
-  name        = "${var.name}-job-server-sg"
+resource "aws_lb" "this" {
+  name               = "${var.name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = var.subnet_ids
+  enable_deletion_protection = false
+
+  tags = var.tags
+}
+
+############################################################
+# Target Group (generic, can be used by multiple services)
+############################################################
+resource "aws_lb_target_group" "this" {
+  name        = "${var.name}-tg"
+  port        = 80   # Default, can override in ECS service module
+  protocol    = "HTTP"
   vpc_id      = var.vpc_id
-  description = "Job-server SG (only Backend can reach)"
+  target_type = "ip"
 
-  dynamic "ingress" {
-    for_each = var.backend_to_job_server ? [1] : []
-
-    content {
-      description              = "Backend → Job-server"
-      from_port                = var.job_server_port
-      to_port                  = var.job_server_port
-      protocol                 = "tcp"
-      security_groups          = [aws_security_group.backend.id]
-    }
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  health_check {
+    path                = "/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
   }
 
   tags = var.tags
 }
+
+############################################################
+# HTTP Listener
+############################################################
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.this.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.this.arn
+  }
+}
+
+############################################################
+# HTTPS Listener (optional, with ACM certificate)
+# User can comment out if no certificate available
+############################################################
+# variable "certificate_arn" { type = string, default = "" }
+# resource "aws_lb_listener" "https" {
+#   load_balancer_arn = aws_lb.this.arn
+#   port              = 443
+#   protocol          = "HTTPS"
+#   ssl_policy        = "ELBSecurityPolicy-2016-08"
+#   certificate_arn   = var.certificate_arn
+#   default_action {
+#     type             = "forward"
+#     target_group_arn = aws_lb_target_group.this.arn
+#   }
+# }
 
 ############################################################
 # Outputs
 ############################################################
-output "frontend_sg_id" {
-  value = aws_security_group.frontend.id
+output "alb_arn" {
+  value = aws_lb.this.arn
 }
 
-output "backend_sg_id" {
-  value = aws_security_group.backend.id
+output "alb_dns_name" {
+  value = aws_lb.this.dns_name
 }
 
-output "job_server_sg_id" {
-  value = aws_security_group.job_server.id
+output "alb_sg_id" {
+  value = aws_security_group.alb.id
 }
 
-# Uncomment if ALB SG is managed here
-# output "alb_sg_id" {
-#   value = aws_security_group.alb.id
-# }
+output "target_group_arn" {
+  value = aws_lb_target_group.this.arn
+}
+
+output "listener_arn" {
+  value = aws_lb_listener.http.arn
+}
