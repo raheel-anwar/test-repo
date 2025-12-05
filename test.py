@@ -141,3 +141,96 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+import logging
+import sys
+import time
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from app.db import engine
+
+LOG = logging.getLogger("db.migrate")
+
+LOCK_ID = 999999
+LOCK_TIMEOUT = 180
+POLL_INTERVAL = 5
+
+
+class MigrationFailed(SystemExit):
+    pass
+
+
+def acquire_lock(conn):
+    start = time.time()
+    LOG.info("Waiting to acquire DB migration lock...")
+
+    while True:
+        locked = conn.execute(
+            text("SELECT pg_try_advisory_lock(:id)"),
+            {"id": LOCK_ID}
+        ).scalar()
+
+        if locked:
+            LOG.info("✅ Migration lock acquired")
+            return
+
+        if time.time() - start > LOCK_TIMEOUT:
+            raise MigrationFailed("⏱ Timeout waiting for migration lock")
+
+        time.sleep(POLL_INTERVAL)
+
+
+def release_lock(conn):
+    conn.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": LOCK_ID})
+    LOG.info("✅ Migration lock released")
+
+
+def run():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
+
+    LOG.info("🚀 Starting migrations")
+
+    try:
+        with engine.begin() as conn:
+            acquire_lock(conn)
+
+            try:
+                alembic_cfg = Config("alembic.ini")
+                alembic_cfg.attributes["connection"] = conn
+
+                LOG.info("Applying Alembic migrations...")
+                command.upgrade(alembic_cfg, "head")
+                LOG.info("✅ Migrations complete")
+
+            finally:
+                release_lock(conn)
+
+    except SQLAlchemyError:
+        LOG.exception("❌ Database error during migration")
+        raise MigrationFailed(1)
+
+    except Exception:
+        LOG.exception("🔥 Migration failure")
+        raise
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except Exception:
+        sys.exit(1)
+
+
+connection = config.attributes.get("connection")
+
+if connection is not None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+else:
+    context.configure(...)
+
