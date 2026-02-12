@@ -1,0 +1,51 @@
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - echo Getting latest task definition
+      - TASK_DEF_ARN=$(aws ecs describe-task-definition \
+          --task-definition my-task-family \
+          --query 'taskDefinition.taskDefinitionArn' \
+          --output text)
+
+      - echo Running one-off ECS task with override
+      - |
+        TASK_ARN=$(aws ecs run-task \
+          --cluster my-ecs-cluster \
+          --launch-type FARGATE \
+          --task-definition "$TASK_DEF_ARN" \
+          --network-configuration "awsvpcConfiguration={subnets=[subnet-123],securityGroups=[sg-123],assignPublicIp=ENABLED}" \
+          --overrides '{
+            "containerOverrides": [
+              {
+                "name": "my-container",
+                "command": ["echo", "Hello from CodeBuild"]
+              }
+            ]
+          }' \
+          --query 'tasks[0].taskArn' \
+          --output text)
+
+        echo "Started task: $TASK_ARN"
+
+        echo "Waiting for task to stop..."
+        aws ecs wait tasks-stopped \
+          --cluster my-ecs-cluster \
+          --tasks "$TASK_ARN"
+
+        echo "Getting container exit code..."
+        EXIT_CODE=$(aws ecs describe-tasks \
+          --cluster my-ecs-cluster \
+          --tasks "$TASK_ARN" \
+          --query 'tasks[0].containers[?name==`my-container`].exitCode' \
+          --output text)
+
+        echo "Container exit code: $EXIT_CODE"
+
+        if [ "$EXIT_CODE" != "0" ]; then
+          echo "ECS task failed!"
+          exit 1
+        fi
+
+        echo "ECS task succeeded!"
